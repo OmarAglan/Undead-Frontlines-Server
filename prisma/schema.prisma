@@ -19,15 +19,19 @@ model User {
 }
 
 model Character {
-  id         String   @id @default(uuid())
-  user       User     @relation(fields: [userId], references: [id])
-  userId     String
-  name       String
-  appearance Json?
-  class      String?
-  country    String?
-  level      Int      @default(1)
-  createdAt  DateTime @default(now())
+  id            String       @id @default(uuid())
+  name          String
+  appearance    Json?
+  class         String?
+  level         Int          @default(1)
+  createdAt     DateTime     @default(now())
+  user          User         @relation(fields: [userId], references: [id])
+  userId        String
+  country       Country      @relation(fields: [countryId], references: [id])
+  countryId     String
+  // Location can be updated as the player moves
+  currentGovernorateId String?
+  currentCityId        String?
 }
 
 model RefreshToken {
@@ -39,19 +43,31 @@ model RefreshToken {
   expiresAt DateTime
 }
 
+// --- World Hierarchy ---
+
 model Country {
-  id           String   @id @default(cuid())
-  name         String   @unique
-  progress     Float    @default(0)
-  safeZoneHost String?
-  sectors      Sector[]
+  id           String        @id @default(cuid())
+  name         String        @unique
+  progress     Float         @default(0) // Aggregated from governorates
+  safeZoneHost String?       // IP/address for the main capital safe zone
+  governorates Governorate[]
+  characters   Character[]
 }
 
-model Sector {
-  id        String  @id @default(cuid())
-  country   Country @relation(fields: [countryId], references: [id])
+model Governorate {
+  id        String   @id @default(cuid())
+  name      String
+  progress  Float    @default(0) // Aggregated from cities
+  country   Country  @relation(fields: [countryId], references: [id])
   countryId String
-  status    String
-  progress  Float   @default(0)
-  maxTeams  Int     @default(32)
+  cities    City[]
+}
+
+model City {
+  id          String      @id @default(cuid())
+  name        String
+  status      String      @default("infected") // e.g., "infected", "contested", "liberated"
+  progress    Float       @default(0)
+  governorate Governorate @relation(fields: [governorateId], references: [id])
+  governorateId String
 }
