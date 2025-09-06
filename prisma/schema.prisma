@@ -1,15 +1,57 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
-generator client {
-  provider = "prisma-client-js"
-  output   = "../src/generated/prisma"
-}
-
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  password      String
+  displayName   String?
+  emailVerified Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  characters    Character[]
+  refreshTokens RefreshToken[]
+}
+
+model Character {
+  id         String   @id @default(uuid())
+  user       User     @relation(fields: [userId], references: [id])
+  userId     String
+  name       String
+  appearance Json?
+  class      String?
+  country    String?
+  level      Int      @default(1)
+  createdAt  DateTime @default(now())
+}
+
+model RefreshToken {
+  token     String   @id
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+}
+
+model Country {
+  id           String   @id @default(cuid())
+  name         String   @unique
+  progress     Float    @default(0)
+  safeZoneHost String?
+  sectors      Sector[]
+}
+
+model Sector {
+  id        String  @id @default(cuid())
+  country   Country @relation(fields: [countryId], references: [id])
+  countryId String
+  status    String
+  progress  Float   @default(0)
+  maxTeams  Int     @default(32)
 }
