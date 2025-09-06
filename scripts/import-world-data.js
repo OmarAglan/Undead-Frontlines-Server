@@ -23,7 +23,6 @@ async function main() {
   });
   console.log('✅ Countries imported successfully.');
 
-  // Create a map of source country ID -> our new database country ID
   const dbCountries = await prisma.country.findMany();
   const countryNameIdMap = new Map(dbCountries.map(c => [c.name, c.id]));
   const sourceCountryIdToDbId = new Map(countries.map(c => [c.id, countryNameIdMap.get(c.name)]));
@@ -32,11 +31,10 @@ async function main() {
   console.log('\nImporting Governorates...');
   for (const gov of governorates) {
     const countryId = sourceCountryIdToDbId.get(gov.country_id);
-    if (!countryId) continue; // Skip if country doesn't exist
+    if (!countryId) continue;
 
     await prisma.governorate.upsert({
       where: {
-        // This is the correct syntax for the composite unique constraint
         name_countryId: {
           name: gov.name,
           countryId: countryId,
@@ -51,7 +49,6 @@ async function main() {
   }
   console.log('✅ Governorates imported successfully.');
   
-  // Create a map of source governorate ID -> our new database governorate ID
   const dbGovernorates = await prisma.governorate.findMany();
   const govCompositeKeyToIdMap = new Map(dbGovernorates.map(g => [`${g.name}_${g.countryId}`, g.id]));
   const sourceGovIdToDbId = new Map();
@@ -64,14 +61,25 @@ async function main() {
       }
   }
 
-  // 4. Import Cities (in batches for performance)
+  // 4. Import Cities (with duplicate handling)
   console.log('\nImporting Cities...');
   const BATCH_SIZE = 500;
   for (let i = 0; i < cities.length; i += BATCH_SIZE) {
     const batch = cities.slice(i, i + BATCH_SIZE);
+    
+    // --- NEW: Add a Set to track duplicates WITHIN this batch ---
+    const processedInBatch = new Set();
+    
     const promises = batch.map(city => {
       const governorateId = sourceGovIdToDbId.get(city.state_id);
-      if (!governorateId) return null; // Skip if governorate doesn't exist
+      if (!governorateId) return null;
+
+      // --- NEW: Create a unique key and check for duplicates ---
+      const uniqueKey = `${city.name}_${governorateId}`;
+      if (processedInBatch.has(uniqueKey)) {
+        return null; // Skip this duplicate within the batch
+      }
+      processedInBatch.add(uniqueKey);
 
       return prisma.city.upsert({
         where: {
@@ -86,7 +94,7 @@ async function main() {
           governorateId: governorateId,
         },
       });
-    }).filter(p => p !== null); // Filter out null promises
+    }).filter(p => p !== null);
     
     await Promise.all(promises);
     console.log(`  - Imported batch ${Math.floor(i / BATCH_SIZE) + 1} of ${Math.ceil(cities.length / BATCH_SIZE)}...`);
