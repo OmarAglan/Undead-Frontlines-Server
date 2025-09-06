@@ -12,19 +12,35 @@ router.get('/countries', async (req, res) => {
   res.json(countries);
 });
 
-// GET /api/world/sectors/:countryId
-router.get('/sectors/:countryId', async (req, res) => {
+// GET /api/world/governorates/:countryId
+router.get('/governorates/:countryId', async (req, res) => {
   const { countryId } = req.params;
-  const sectors = await prisma.sector.findMany({ where: { countryId } });
-  res.json(sectors);
+  const governorates = await prisma.governorate.findMany({
+    where: { countryId },
+    select: { id: true, name: true, progress: true }
+  });
+  res.json(governorates);
 });
 
-// POST /api/world/join-sector
-router.post('/join-sector', async (req, res) => {
-  // in prod matchmaker assigns a FishNet server instance
-  const { sectorId } = req.body;
-  // Temporary: return a placeholder FishNet server address (replace with real matchmaker)
-  return res.json({ success: true, sectorServer: process.env.SECTOR_FISHNET || '127.0.0.1:7777' });
+// GET /api/world/cities/:governorateId
+router.get('/cities/:governorateId', async (req, res) => {
+  const { governorateId } = req.params;
+  const cities = await prisma.city.findMany({
+    where: { governorateId },
+    select: { id: true, name: true, status: true, progress: true }
+  });
+  res.json(cities);
+});
+
+// POST /api/world/join-city
+router.post('/join-city', (req, res) => {
+  // In production, a matchmaker would assign a FishNet server instance here
+  const { cityId } = req.body;
+  if (!cityId) {
+    return res.status(400).json({ error: 'cityId is required' });
+  }
+  // For now, return a placeholder FishNet server address
+  return res.json({ success: true, cityServer: process.env.SECTOR_FISHNET || '127.0.0.1:7777' });
 });
 
 module.exports = router;
