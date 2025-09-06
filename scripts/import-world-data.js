@@ -4,18 +4,10 @@ const path = require('path');
 
 const prisma = new PrismaClient();
 
-// --- Configuration ---
-// This map helps reconcile the source data's 'state' term with our 'governorate' term.
-const DATA_SOURCE_MAPPING = {
-  country: { id: 'id', name: 'name' },
-  governorate: { id: 'id', name: 'name', countryId: 'country_id' },
-  city: { id: 'id', name: 'name', governorateId: 'state_id' },
-};
-
 async function main() {
   console.log('--- Starting World Data Import ---');
 
-  // 1. Read data files from the /data directory
+  // 1. Read data files
   const dataPath = path.join(__dirname, '..', 'data');
   const countries = JSON.parse(fs.readFileSync(path.join(dataPath, 'countries.json'), 'utf-8'));
   const governorates = JSON.parse(fs.readFileSync(path.join(dataPath, 'states.json'), 'utf-8'));
@@ -25,110 +17,79 @@ async function main() {
 
   // 2. Import Countries
   console.log('\nImporting Countries...');
-  for (const country of countries) {
-    await prisma.country.upsert({
-      where: { name: country[DATA_SOURCE_MAPPING.country.name] },
-      update: {}, // No updates needed if it exists
-      create: {
-        name: country[DATA_SOURCE_MAPPING.country.name],
-        // You can set a default safeZoneHost here if you want
-        // safeZoneHost: '127.0.0.1:7770',
-      },
-    });
-  }
+  await prisma.country.createMany({
+    data: countries.map(c => ({ name: c.name })),
+    skipDuplicates: true,
+  });
   console.log('✅ Countries imported successfully.');
 
-  // We need a map of old ID -> new ID to link relations
-  const countryMap = new Map();
+  // Create a map of source country ID -> our new database country ID
   const dbCountries = await prisma.country.findMany();
-  dbCountries.forEach(c => countryMap.set(c.name, c.id));
-  
-  // Create a map of source country ID to our new database country ID
-  const sourceCountryIdToDbId = new Map();
-  countries.forEach(c => {
-    const dbId = countryMap.get(c.name);
-    if (dbId) {
-      sourceCountryIdToDbId.set(c.id, dbId);
-    }
-  });
-
+  const countryNameIdMap = new Map(dbCountries.map(c => [c.name, c.id]));
+  const sourceCountryIdToDbId = new Map(countries.map(c => [c.id, countryNameIdMap.get(c.name)]));
 
   // 3. Import Governorates
   console.log('\nImporting Governorates...');
   for (const gov of governorates) {
-    const countryId = sourceCountryIdToDbId.get(gov[DATA_SOURCE_MAPPING.governorate.countryId]);
-    if (!countryId) {
-      // Skip governorates whose country was not found/imported
-      continue;
-    }
+    const countryId = sourceCountryIdToDbId.get(gov.country_id);
+    if (!countryId) continue; // Skip if country doesn't exist
 
     await prisma.governorate.upsert({
       where: {
-        // A unique constraint on {name, countryId} would be ideal.
-        // For now, we simulate it with a more complex find.
-        // NOTE: This can be slow. In a real production import, you'd add a unique constraint in the DB.
+        // This is the correct syntax for the composite unique constraint
         name_countryId: {
-            name: gov[DATA_SOURCE_MAPPING.governorate.name],
-            countryId: countryId,
+          name: gov.name,
+          countryId: countryId,
         },
       },
       update: {},
       create: {
-        name: gov[DATA_SOURCE_MAPPING.governorate.name],
+        name: gov.name,
         countryId: countryId,
       },
     });
   }
   console.log('✅ Governorates imported successfully.');
   
-  // Create a map of source governorate ID to our new database governorate ID
-  const governorateMap = new Map();
+  // Create a map of source governorate ID -> our new database governorate ID
   const dbGovernorates = await prisma.governorate.findMany();
-  dbGovernorates.forEach(g => governorateMap.set(g.name + g.countryId, g.id));
-  
+  const govCompositeKeyToIdMap = new Map(dbGovernorates.map(g => [`${g.name}_${g.countryId}`, g.id]));
   const sourceGovIdToDbId = new Map();
-  governorates.forEach(g => {
-    const countryId = sourceCountryIdToDbId.get(g.country_id);
-    const dbId = governorateMap.get(g.name + countryId);
-    if (dbId) {
-      sourceGovIdToDbId.set(g.id, dbId);
-    }
-  });
+  for (const gov of governorates) {
+      const countryId = sourceCountryIdToDbId.get(gov.country_id);
+      if(!countryId) continue;
+      const dbId = govCompositeKeyToIdMap.get(`${gov.name}_${countryId}`);
+      if(dbId) {
+        sourceGovIdToDbId.set(gov.id, dbId);
+      }
+  }
 
-
-  // 4. Import Cities
+  // 4. Import Cities (in batches for performance)
   console.log('\nImporting Cities...');
-  // Importing cities in batches is more efficient
-  const cityBatches = [];
-  let currentBatch = [];
-  for (const city of cities) {
-    const governorateId = sourceGovIdToDbId.get(city[DATA_SOURCE_MAPPING.city.governorateId]);
-    if (!governorateId) {
-      continue;
-    }
-    currentBatch.push({
-      name: city[DATA_SOURCE_MAPPING.city.name],
-      governorateId: governorateId,
-    });
+  const BATCH_SIZE = 500;
+  for (let i = 0; i < cities.length; i += BATCH_SIZE) {
+    const batch = cities.slice(i, i + BATCH_SIZE);
+    const promises = batch.map(city => {
+      const governorateId = sourceGovIdToDbId.get(city.state_id);
+      if (!governorateId) return null; // Skip if governorate doesn't exist
 
-    if (currentBatch.length === 1000) {
-      cityBatches.push(currentBatch);
-      currentBatch = [];
-    }
-  }
-  if (currentBatch.length > 0) {
-    cityBatches.push(currentBatch);
-  }
-
-  for (const batch of cityBatches) {
-    // createMany is much faster but doesn't have upsert.
-    // We assume we are running this on a clean DB for cities.
-    // For re-runnable scripts, this would need to be an upsert loop like above.
-    await prisma.city.createMany({
-      data: batch,
-      skipDuplicates: true, // This helps avoid errors if a city already exists
-    });
-    console.log(`  - Imported a batch of ${batch.length} cities...`);
+      return prisma.city.upsert({
+        where: {
+          name_governorateId: {
+            name: city.name,
+            governorateId: governorateId,
+          },
+        },
+        update: {},
+        create: {
+          name: city.name,
+          governorateId: governorateId,
+        },
+      });
+    }).filter(p => p !== null); // Filter out null promises
+    
+    await Promise.all(promises);
+    console.log(`  - Imported batch ${Math.floor(i / BATCH_SIZE) + 1} of ${Math.ceil(cities.length / BATCH_SIZE)}...`);
   }
   console.log('✅ Cities imported successfully.');
 
