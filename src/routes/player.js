@@ -4,10 +4,73 @@ const { PrismaClient } = require('@prisma/client');
 
 const prisma = new PrismaClient();
 
-// POST /api/player/character
-// This route will be protected by our middleware
+// === NEW: GET /api/player/profile ===
+// Fetches the main user profile and a list of their characters.
+// Useful for the character selection screen.
+router.get('/profile', async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const userProfile = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        displayName: true,
+        createdAt: true,
+        characters: {
+          select: {
+            id: true,
+            name: true,
+            level: true,
+            country: {
+              select: {
+                name: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!userProfile) {
+      return res.status(404).json({ error: 'User profile not found.' });
+    }
+
+    res.json(userProfile);
+  } catch (error) {
+    console.error('Error fetching user profile:', error);
+    res.status(500).json({ error: 'Failed to fetch user profile.' });
+  }
+});
+
+// === NEW: GET /api/player/characters ===
+// A simpler route to just get the list of characters.
+router.get('/characters', async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const characters = await prisma.character.findMany({
+      where: { userId: userId },
+      select: {
+        id: true,
+        name: true,
+        level: true,
+        country: {
+          select: {
+            name: true,
+          },
+        },
+      },
+    });
+    res.json(characters);
+  } catch (error) {
+    console.error('Error fetching characters:', error);
+    res.status(500).json({ error: 'Failed to fetch characters.' });
+  }
+});
+
+// POST /api/player/character (from previous step)
+// Creates a new character for the logged-in user.
 router.post('/character', async (req, res) => {
-  // The middleware has already verified the user and attached it to req.user
   const userId = req.user.id;
   const { name, countryId } = req.body;
 
@@ -16,13 +79,11 @@ router.post('/character', async (req, res) => {
   }
 
   try {
-    // Check if the country exists
     const country = await prisma.country.findUnique({ where: { id: countryId } });
     if (!country) {
       return res.status(404).json({ error: 'Country not found.' });
     }
 
-    // Check if the user already has a character with that name
     const existingCharacter = await prisma.character.findFirst({
         where: { userId: userId, name: name }
     });
